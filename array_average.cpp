@@ -54,7 +54,7 @@ int main(int argc, char** argv) {
     vector<int> send_counts(world_size, array_size / world_size);
     vector<int> displacements(world_size, 0);
 
-    // Handle uneven division by adding remaining elements to the last process
+    // Handle uneven division by adding remaining elements to the first processes
     for (int i = 0; i < array_size % world_size; ++i) {
         send_counts[i]++;
     }
@@ -65,18 +65,32 @@ int main(int argc, char** argv) {
 
     vector<int> subarray(send_counts[world_rank]);
 
-    // Scatter the data using MPI_Scatterv
-    MPI_Scatterv(
-        array.data(),
-        send_counts.data(),
-        displacements.data(),
-        MPI_INT,
-        subarray.data(),
-        send_counts[world_rank],
-        MPI_INT,
-        0,
-        MPI_COMM_WORLD
-    );
+    // Root process sends data to other processes
+    if (world_rank == 0) {
+        for (int i = 1; i < world_size; ++i) {
+            MPI_Send(
+                array.data() + displacements[i], // data
+                send_counts[i],                  // count
+                MPI_INT,                         // datatype
+                i,                               // destination
+                0,                               // Tag
+                MPI_COMM_WORLD                   // Communicator
+            );
+        }
+        // Root process extracts its subarray
+        subarray.assign(array.begin(), array.begin() + send_counts[0]);
+    } else {
+        // Other processes receive their subarray
+        MPI_Recv(
+            subarray.data(),                 // data
+            send_counts[world_rank],         // count
+            MPI_INT,                         // datatype
+            0,                               // Source 
+            0,                               // Tag
+            MPI_COMM_WORLD,                  // Communicator
+            MPI_STATUS_IGNORE                // status
+        );
+    }
 
     // Calculate the average of the subarray
     double subarray_avg = calculateAverage(subarray);
@@ -94,7 +108,7 @@ int main(int argc, char** argv) {
         MPI_COMM_WORLD
     );
 
-    // Create a formatted string for this process's subarray using string concatenation
+    // Gather local outputs at the root process
     string local_output = "Process " + to_string(world_rank) +
                           " on processor " + string(processor_name) +
                           " received " + to_string(subarray.size()) +
@@ -106,7 +120,6 @@ int main(int argc, char** argv) {
 
     local_output += "\nSubarray average: " + to_string(subarray_avg) + "\n";
 
-    // Convert the string to a C-style string for MPI_Gather
     int local_size = local_output.size();
     vector<int> sizes(world_size);
     MPI_Gather(
@@ -120,7 +133,6 @@ int main(int argc, char** argv) {
         MPI_COMM_WORLD
     );
 
-    // Gather all subarray outputs at the root process
     vector<int> displs(world_size, 0);
     if (world_rank == 0) {
         for (int i = 1; i < world_size; ++i) {
@@ -142,14 +154,13 @@ int main(int argc, char** argv) {
         MPI_COMM_WORLD
     );
 
-    // Print all gathered subarray outputs at the root process
     if (world_rank == 0) {
         cout << "*************************************\n";
         cout << "Collected subarrays from all processes:\n";
         cout << string(gathered_output.begin(), gathered_output.end());
         cout << "*************************************\n";
 
-        // Optionally calculate the overall average
+        // Calculate overall average
         double overall_sum = 0;
         for (int i = 0; i < world_size; ++i) {
             cout << "Process " << i << " average: " << all_averages[i]
